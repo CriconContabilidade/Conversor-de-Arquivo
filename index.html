@@ -124,7 +124,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
   <div class="card">
     <div id="dropzone" class="dropzone">
       <div class="big">Arraste um PDF de extrato aqui, ou clique para escolher</div>
-      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Unicred (Demonstrativo de Rentabilidade)</div>
+      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Demonstrativo de Rentabilidade)</div>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div id="statusLine" class="status-line hidden"></div>
@@ -203,6 +203,44 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
     <div class="btn-row">
       <button class="btn" id="btnOfxInvestment">Baixar OFX</button>
       <button class="btn ghost" id="btnXlsxInvestment">Baixar Excel</button>
+    </div>
+  </div>
+
+  <!-- CREDIT CARD INVOICE RESULT -->
+  <div id="creditCardCard" class="card hidden">
+    <div class="section-title">Fatura de cartão identificada</div>
+    <div class="fields">
+      <div class="field"><label>Banco</label><input id="cBankId" type="text" value="Sicredi"></div>
+      <div class="field"><label>Cartão (final)</label><input id="cAccountId" type="text"></div>
+      <div class="field"><label>Tipo de conta</label>
+        <select id="cAccountType">
+          <option value="CREDITLINE">Cartão de crédito</option>
+          <option value="CHECKING">Conta corrente</option>
+          <option value="SAVINGS">Poupança</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="invert-toggle"><input type="checkbox" id="cInvert"> Inverter valores (troca soma por subtração e vice-versa)</label>
+
+    <div class="summary-row">
+      <div class="item"><div class="k">Portador</div><div class="v" id="cHolder">—</div></div>
+      <div class="item"><div class="k">Vencimento</div><div class="v" id="cVenc">—</div></div>
+      <div class="item"><div class="k">Total da fatura</div><div class="v" id="cTotal">—</div></div>
+      <div class="item"><div class="k">Lançamentos</div><div class="v" id="cCount">—</div></div>
+      <div class="item"><div class="k">Conferência</div><div class="v" id="cCheck">—</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="preview" id="creditCardTable">
+        <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="btnOfxCreditCard">Baixar OFX</button>
+      <button class="btn ghost" id="btnXlsxCreditCard">Baixar Excel</button>
     </div>
   </div>
 
@@ -292,7 +330,11 @@ async function extractText(file) {
 // SHARED HELPERS
 // =====================================================================
 function parseBRL(str) {
-  return parseFloat(String(str).replace(/\./g, '').replace(',', '.'));
+  // Strip everything but digits/comma/dot/minus first (handles "R$", stray
+  // spaces like "- R$ 7.954,88" from pdf.js text extraction, etc.) before
+  // converting the pt-BR thousands/decimal separators.
+  const cleaned = String(str).replace(/[^0-9,.\-]/g, '');
+  return parseFloat(cleaned.replace(/\./g, '').replace(',', '.'));
 }
 function fmtBRL(n) {
   return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -507,6 +549,94 @@ PARSERS.push({
   }
 });
 
+// ---- Sicredi · Fatura de Cartão de Crédito --------------------------
+const MESES_PT = { jan:1, fev:2, mar:3, abr:4, mai:5, jun:6, jul:7, ago:8, set:9, out:10, nov:11, dez:12 };
+PARSERS.push({
+  id: 'sicredi-creditcard',
+  bank: 'Sicredi',
+  docType: 'creditcard',
+  label: 'Sicredi — Fatura Cartão de Crédito',
+  detect(text) {
+    return /SICREDI/i.test(text) && /Cart[ãa]o portador/i.test(text);
+  },
+  parse(rawText) {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    const vencMatch = rawText.match(/Vencimento\s+(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!vencMatch) throw new Error('Não foi possível identificar o vencimento da fatura.');
+    const vencDate = new Date(Date.UTC(+vencMatch[3], +vencMatch[2] - 1, +vencMatch[1]));
+
+    const totalFaturaMatch = rawText.match(/Total desta Fatura\s+([\d.,]+)/);
+    const totalFatura = totalFaturaMatch ? parseBRL(totalFaturaMatch[1]) : null;
+
+    const cardMatch = rawText.match(/final\s+(\d+)/i);
+    const cardLast4 = cardMatch ? cardMatch[1] : '';
+
+    // "final" often loses its "i" to a ligature glyph (fnal) when extracted from these PDFs,
+    // and pdf.js sometimes inserts a stray space after "/" (date) or before ")" / after "-"
+    // (negative amounts) depending on how the PDF's text runs are chunked.
+    const TXN_LINE = /^(\d{2})\/\s*([a-zç]{3})\s+(\d{2}:\d{2})\s+(.+?)\s+(-?\s?R\$\s?[\d.]+,\d{2})$/i;
+    const PORTADOR_START = /^Cart[ãa]o portador\s+(.+?)\s*\(f[ií]?nal\s+(\d+)\s*\)$/i;
+    const PORTADOR_TOTAL = /^Total cart[ãa]o portador\s*\(f[ií]?nal\s+(\d+)\s*\)\s+R\$\s?([\d.]+,\d{2})$/i;
+
+    const sections = [];
+    const sectionByKey = new Map();
+    let current = null;
+    let currentYear = vencDate.getUTCFullYear();
+    let prevMonth = null;
+    let txnCounter = 0;
+    const transactions = [];
+
+    for (const line of lines) {
+      const pStart = line.match(PORTADOR_START);
+      if (pStart) {
+        const key = `${pStart[1].trim()}|${pStart[2]}`;
+        if (sectionByKey.has(key)) {
+          current = sectionByKey.get(key);
+        } else {
+          current = { holder: pStart[1].trim(), cardLast4: pStart[2], statedTotal: null };
+          sections.push(current);
+          sectionByKey.set(key, current);
+          currentYear = vencDate.getUTCFullYear();
+          prevMonth = null;
+        }
+        continue;
+      }
+      const pTotal = line.match(PORTADOR_TOTAL);
+      if (pTotal && current) {
+        current.statedTotal = parseBRL(pTotal[2]);
+        continue;
+      }
+      const m = line.match(TXN_LINE);
+      if (m && current) {
+        const [, dd, mon, , desc, valStr] = m;
+        const monthNum = MESES_PT[mon.toLowerCase()];
+        if (!monthNum) continue;
+        if (prevMonth !== null && monthNum > prevMonth) currentYear -= 1;
+        prevMonth = monthNum;
+        const date = new Date(Date.UTC(currentYear, monthNum - 1, +dd));
+        const amount = parseBRL(valStr);
+        txnCounter++;
+        transactions.push({
+          date,
+          description: `${desc.trim()}${sections.length > 1 ? ' — ' + current.holder : ''}`,
+          amount,
+          fitid: `${fmtOfxDate(date)}${String(txnCounter).padStart(4, '0')}`,
+        });
+      }
+    }
+
+    if (transactions.length === 0) throw new Error('Nenhum lançamento foi reconhecido na fatura.');
+    transactions.sort((a, b) => a.date - b.date);
+
+    return {
+      docType: 'creditcard',
+      cardLast4, vencDate, totalFatura, sections, transactions,
+      holders: sections.map(s => s.holder).join(', '),
+    };
+  }
+});
+
 // =====================================================================
 // OFX GENERATOR (SGML 1.0.2)
 // =====================================================================
@@ -643,6 +773,36 @@ function buildInvestmentOFX(result) {
   });
 }
 
+function buildCreditCardOFX(result) {
+  const { transactions, vencDate, totalFatura } = result;
+  const mult = document.getElementById('cInvert').checked ? -1 : 1;
+  const periodStart = transactions[0].date;
+  const periodEnd = transactions[transactions.length - 1].date;
+  const trnLines = transactions.map(t => {
+    const amount = t.amount * mult;
+    const type = amount >= 0 ? 'DEBIT' : 'CREDIT';
+    const name = escapeOfx(t.description).slice(0, 60);
+    return [
+      '<STMTTRN>',
+      `<TRNTYPE>${type}`,
+      `<DTPOSTED>${fmtOfxDate(t.date)}`,
+      `<TRNAMT>${amount.toFixed(2)}`,
+      `<FITID>${t.fitid}`,
+      `<NAME>${name}`,
+      '</STMTTRN>',
+    ].join('\n');
+  }).join('\n');
+
+  return buildOfxEnvelope({
+    bankId: document.getElementById('cBankId').value,
+    branchId: '0',
+    accountId: document.getElementById('cAccountId').value,
+    acctType: document.getElementById('cAccountType').value,
+    periodStart, periodEnd, trnLines,
+    balAmt: totalFatura, balDate: vencDate,
+  });
+}
+
 function downloadText(filename, content, mime) {
   const blob = new Blob([content], { type: mime || 'text/plain' });
   const url = URL.createObjectURL(blob);
@@ -684,6 +844,19 @@ function downloadInvestmentXlsx(result) {
   XLSX.writeFile(wb, `aplicacao-${fmtISO(result.periodStart)}-a-${fmtISO(result.periodEnd)}.xlsx`);
 }
 
+function downloadCreditCardXlsx(result) {
+  const mult = document.getElementById('cInvert').checked ? -1 : 1;
+  const rows = result.transactions.map(t => ({
+    Data: fmtDateBR(t.date),
+    Descrição: t.description,
+    Valor: t.amount * mult,
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Fatura');
+  XLSX.writeFile(wb, `fatura-${fmtISO(result.vencDate)}.xlsx`);
+}
+
 // =====================================================================
 // UI WIRING
 // =====================================================================
@@ -692,6 +865,7 @@ const fileInput = document.getElementById('fileInput');
 const statusLine = document.getElementById('statusLine');
 const checkingCard = document.getElementById('checkingCard');
 const investmentCard = document.getElementById('investmentCard');
+const creditCardCard = document.getElementById('creditCardCard');
 
 let currentResult = null;
 
@@ -715,6 +889,7 @@ function setStatus(msg, isErr) {
 async function handleFile(file) {
   checkingCard.classList.add('hidden');
   investmentCard.classList.add('hidden');
+  creditCardCard.classList.add('hidden');
   setStatus('Lendo PDF…');
   try {
     const text = await extractText(file);
@@ -728,6 +903,7 @@ async function handleFile(file) {
     currentResult = result;
     if (result.docType === 'checking') renderChecking(result);
     else if (result.docType === 'investment') renderInvestment(result);
+    else if (result.docType === 'creditcard') renderCreditCard(result);
     setStatus(`Detectado: ${parser.label} — ${file.name}`);
   } catch (err) {
     console.error(err);
@@ -801,6 +977,46 @@ function renderInvestment(result) {
   investmentCard.classList.remove('hidden');
 }
 
+function renderCreditCard(result) {
+  document.getElementById('cAccountId').value = result.cardLast4;
+  document.getElementById('cHolder').textContent = result.holders || '—';
+  document.getElementById('cVenc').textContent = fmtDateBR(result.vencDate);
+  document.getElementById('cTotal').textContent = result.totalFatura != null ? `R$ ${fmtBRL(result.totalFatura)}` : '—';
+  document.getElementById('cCount').textContent = result.transactions.length;
+
+  // Conferência: sum of purchase-only rows (amount > 0) per cardholder section
+  // should match that section's printed "Total cartão portador" footer — this
+  // validates every purchase line was captured without needing to reconcile
+  // the full fatura (previous balance, payments and encargos aren't itemized
+  // as individual transaction rows, so they're excluded from this check).
+  const cCheckEl = document.getElementById('cCheck');
+  const sectionsWithTotal = result.sections.filter(s => s.statedTotal != null);
+  if (sectionsWithTotal.length === 0) {
+    cCheckEl.innerHTML = '<span class="badge warn">— sem total p/ conferir</span>';
+  } else {
+    const sumPurchases = result.transactions.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+    const expected = sectionsWithTotal.reduce((s, sec) => s + sec.statedTotal, 0);
+    const diff = Math.round((sumPurchases - expected) * 100) / 100;
+    if (Math.abs(diff) < 0.01) {
+      cCheckEl.innerHTML = '<span class="badge ok">✓ confere</span>';
+    } else {
+      cCheckEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diff)}</span>`;
+    }
+  }
+
+  const cMult = document.getElementById('cInvert').checked ? -1 : 1;
+  const tbody = document.querySelector('#creditCardTable tbody');
+  tbody.innerHTML = '';
+  for (const t of result.transactions) {
+    const v = t.amount * cMult;
+    const tr = document.createElement('tr');
+    const cls = v < 0 ? 'neg' : 'pos';
+    tr.innerHTML = `<td>${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="num ${cls}">${fmtBRL(v)}</td>`;
+    tbody.appendChild(tr);
+  }
+  creditCardCard.classList.remove('hidden');
+}
+
 function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -810,6 +1026,9 @@ document.getElementById('fInvert').addEventListener('change', () => {
 });
 document.getElementById('iInvert').addEventListener('change', () => {
   if (currentResult && currentResult.docType === 'investment') renderInvestment(currentResult);
+});
+document.getElementById('cInvert').addEventListener('change', () => {
+  if (currentResult && currentResult.docType === 'creditcard') renderCreditCard(currentResult);
 });
 
 document.getElementById('btnOfx').addEventListener('click', () => {
@@ -827,6 +1046,14 @@ document.getElementById('btnOfxInvestment').addEventListener('click', () => {
   if (!currentResult) return;
   const ofx = buildInvestmentOFX(currentResult);
   downloadText(`aplicacao-${fmtISO(currentResult.periodStart)}-a-${fmtISO(currentResult.periodEnd)}.ofx`, ofx, 'application/x-ofx');
+});
+document.getElementById('btnXlsxCreditCard').addEventListener('click', () => {
+  if (currentResult) downloadCreditCardXlsx(currentResult);
+});
+document.getElementById('btnOfxCreditCard').addEventListener('click', () => {
+  if (!currentResult) return;
+  const ofx = buildCreditCardOFX(currentResult);
+  downloadText(`fatura-${fmtISO(currentResult.vencDate)}.ofx`, ofx, 'application/x-ofx');
 });
 </script>
 </body>
