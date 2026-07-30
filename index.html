@@ -166,8 +166,20 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
   <!-- INVESTMENT STATEMENT RESULT -->
   <div id="investmentCard" class="card hidden">
     <div class="section-title">Demonstrativo de aplicação identificado</div>
+    <div class="fields">
+      <div class="field"><label>Banco / Cooperativa</label><input id="iBankId" type="text"></div>
+      <div class="field"><label>Agência</label><input id="iBranchId" type="text"></div>
+      <div class="field"><label>Conta</label><input id="iAccountId" type="text"></div>
+      <div class="field"><label>Tipo de conta</label>
+        <select id="iAccountType">
+          <option value="SAVINGS">Poupança / Aplicação</option>
+          <option value="CHECKING">Conta corrente</option>
+        </select>
+      </div>
+    </div>
+
     <div class="summary-row">
-      <div class="item"><div class="k">Cliente / Conta</div><div class="v" id="iAccount">—</div></div>
+      <div class="item"><div class="k">Cliente</div><div class="v" id="iClient">—</div></div>
       <div class="item"><div class="k">Período</div><div class="v" id="iPeriod">—</div></div>
       <div class="item"><div class="k">Títulos</div><div class="v" id="iCount">—</div></div>
       <div class="item"><div class="k">Rendimento no período</div><div class="v" id="iRend">—</div></div>
@@ -181,6 +193,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
     </div>
 
     <div class="btn-row">
+      <button class="btn" id="btnOfxInvestment">Baixar OFX</button>
       <button class="btn ghost" id="btnXlsxInvestment">Baixar Excel</button>
     </div>
   </div>
@@ -489,25 +502,8 @@ PARSERS.push({
 function escapeOfx(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-function buildOFX(result) {
-  const { bankInfo, transactions, periodStart, periodEnd, closingBalance, closingBalanceDate } = result;
+function buildOfxEnvelope({ bankId, branchId, accountId, acctType, periodStart, periodEnd, trnLines, balAmt, balDate }) {
   const now = fmtOfxDate(new Date());
-  const trnLines = transactions.map(t => {
-    const type = t.amount >= 0 ? 'CREDIT' : 'DEBIT';
-    const name = escapeOfx(t.description).slice(0, 60);
-    const memo = escapeOfx(t.memo).slice(0, 255);
-    return [
-      '<STMTTRN>',
-      `<TRNTYPE>${type}`,
-      `<DTPOSTED>${fmtOfxDate(t.date)}`,
-      `<TRNAMT>${t.amount.toFixed(2)}`,
-      `<FITID>${t.fitid}`,
-      `<NAME>${name}`,
-      memo ? `<MEMO>${memo}` : null,
-      '</STMTTRN>',
-    ].filter(Boolean).join('\n');
-  }).join('\n');
-
   return `OFXHEADER:100
 DATA:OFXSGML
 VERSION:102
@@ -539,10 +535,10 @@ NEWFILEUID:NONE
 <STMTRS>
 <CURDEF>BRL
 <BANKACCTFROM>
-<BANKID>${escapeOfx(bankInfo.bankId)}
-<BRANCHID>${escapeOfx(bankInfo.branchId)}
-<ACCTID>${escapeOfx(bankInfo.accountId)}
-<ACCTTYPE>${document.getElementById('fAccountType').value}
+<BANKID>${escapeOfx(bankId)}
+<BRANCHID>${escapeOfx(branchId)}
+<ACCTID>${escapeOfx(accountId)}
+<ACCTTYPE>${acctType}
 </BANKACCTFROM>
 <BANKTRANLIST>
 <DTSTART>${fmtOfxDate(periodStart)}
@@ -550,13 +546,89 @@ NEWFILEUID:NONE
 ${trnLines}
 </BANKTRANLIST>
 <LEDGERBAL>
-<BALAMT>${closingBalance.toFixed(2)}
-<DTASOF>${fmtOfxDate(closingBalanceDate)}
+<BALAMT>${balAmt.toFixed(2)}
+<DTASOF>${fmtOfxDate(balDate)}
 </LEDGERBAL>
 </STMTRS>
 </STMTTRNRS>
 </BANKMSGSRSV1>
 </OFX>`;
+}
+
+function buildOFX(result) {
+  const { bankInfo, transactions, periodStart, periodEnd, closingBalance, closingBalanceDate } = result;
+  const trnLines = transactions.map(t => {
+    const type = t.amount >= 0 ? 'CREDIT' : 'DEBIT';
+    const name = escapeOfx(t.description).slice(0, 60);
+    const memo = escapeOfx(t.memo).slice(0, 255);
+    return [
+      '<STMTTRN>',
+      `<TRNTYPE>${type}`,
+      `<DTPOSTED>${fmtOfxDate(t.date)}`,
+      `<TRNAMT>${t.amount.toFixed(2)}`,
+      `<FITID>${t.fitid}`,
+      `<NAME>${name}`,
+      memo ? `<MEMO>${memo}` : null,
+      '</STMTTRN>',
+    ].filter(Boolean).join('\n');
+  }).join('\n');
+
+  return buildOfxEnvelope({
+    bankId: bankInfo.bankId, branchId: bankInfo.branchId, accountId: bankInfo.accountId,
+    acctType: document.getElementById('fAccountType').value,
+    periodStart, periodEnd, trnLines,
+    balAmt: closingBalance, balDate: closingBalanceDate,
+  });
+}
+
+// Investment (Unicred demonstrativo) OFX — per the account's real-world example:
+// TRNTYPE is always OTHER (not CREDIT/DEBIT, since these aren't bank movements),
+// there's no <NAME>, FITID is the título (application) number itself rather than
+// a synthetic id, and MEMO follows a "TIPO PRODUTO ( DOC.: título )" pattern.
+// FITID must still be unique per file, so if the same título produces more than
+// one event (e.g. rendimento + IRRF + resgate in the same period), only the
+// first keeps the bare título as FITID — the rest get a "-2", "-3"... suffix.
+function eventMemo(e) {
+  const labels = {
+    'Aplicação': 'APLICACAO RDC',
+    'Rendimento': 'RENDIMENTO PERIODO RDC',
+    'IRRF': 'IRRF COME-COTAS RDC',
+    'Resgate': 'RESGATE RDC',
+  };
+  const label = labels[e.tipo] || e.tipo.toUpperCase();
+  return `${label} ( DOC.: ${e.titulo} )`;
+}
+function buildInvestmentOFX(result) {
+  const { events, periodStart, periodEnd, titulos } = result;
+  const fitidSeen = {};
+  let checknum = 0;
+  const trnLines = events.map(e => {
+    fitidSeen[e.titulo] = (fitidSeen[e.titulo] || 0) + 1;
+    const n = fitidSeen[e.titulo];
+    const fitid = n === 1 ? e.titulo : `${e.titulo}-${n}`;
+    checknum++;
+    return [
+      '<STMTTRN>',
+      '<TRNTYPE>OTHER',
+      `<DTPOSTED>${fmtOfxDate(e.data)}`,
+      `<TRNAMT>${e.valor.toFixed(2)}`,
+      `<FITID>${escapeOfx(fitid)}`,
+      `<CHECKNUM>${checknum}`,
+      `<MEMO>${escapeOfx(eventMemo(e))}`,
+      '</STMTTRN>',
+    ].join('\n');
+  }).join('\n');
+
+  const totalSaldo = titulos.reduce((s, t) => s + t.saldoBrutoAtual, 0);
+
+  return buildOfxEnvelope({
+    bankId: document.getElementById('iBankId').value,
+    branchId: document.getElementById('iBranchId').value,
+    accountId: document.getElementById('iAccountId').value,
+    acctType: document.getElementById('iAccountType').value,
+    periodStart, periodEnd, trnLines,
+    balAmt: totalSaldo, balDate: periodEnd,
+  });
 }
 
 function downloadText(filename, content, mime) {
@@ -681,7 +753,10 @@ function renderChecking(result) {
 }
 
 function renderInvestment(result) {
-  document.getElementById('iAccount').textContent = result.account ? `Coop ${result.account.coop} / AG ${result.account.agencia} / Conta ${result.account.conta}` : (result.client || '—');
+  document.getElementById('iBankId').value = result.account ? result.account.coop : '';
+  document.getElementById('iBranchId').value = result.account ? result.account.agencia : '';
+  document.getElementById('iAccountId').value = result.account ? result.account.conta : '';
+  document.getElementById('iClient').textContent = result.client || '—';
   document.getElementById('iPeriod').textContent = `${fmtDateBR(result.periodStart)} a ${fmtDateBR(result.periodEnd)}`;
   document.getElementById('iCount').textContent = result.titulos.length;
   const totalRend = result.titulos.reduce((s, t) => s + t.rendimentoPeriodo, 0);
@@ -712,6 +787,11 @@ document.getElementById('btnXlsxChecking').addEventListener('click', () => {
 });
 document.getElementById('btnXlsxInvestment').addEventListener('click', () => {
   if (currentResult) downloadInvestmentXlsx(currentResult);
+});
+document.getElementById('btnOfxInvestment').addEventListener('click', () => {
+  if (!currentResult) return;
+  const ofx = buildInvestmentOFX(currentResult);
+  downloadText(`aplicacao-${fmtISO(currentResult.periodStart)}-a-${fmtISO(currentResult.periodEnd)}.ofx`, ofx, 'application/x-ofx');
 });
 </script>
 </body>
