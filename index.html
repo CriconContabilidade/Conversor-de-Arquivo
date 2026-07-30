@@ -222,6 +222,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
     </div>
 
     <label class="invert-toggle"><input type="checkbox" id="cInvert"> Inverter valores (troca soma por subtração e vice-versa)</label>
+    <label class="invert-toggle"><input type="checkbox" id="cUseMonthEnd" checked> Lançar todos no último dia do mês anterior ao vencimento (data original fica no Excel/OFX como referência)</label>
 
     <div class="summary-row">
       <div class="item"><div class="k">Portador</div><div class="v" id="cHolder">—</div></div>
@@ -233,7 +234,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
 
     <div class="table-wrap">
       <table class="preview" id="creditCardTable">
-        <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th></tr></thead>
+        <thead><tr><th>Data</th><th>Data da compra</th><th>Descrição</th><th>Valor</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -629,9 +630,14 @@ PARSERS.push({
     if (transactions.length === 0) throw new Error('Nenhum lançamento foi reconhecido na fatura.');
     transactions.sort((a, b) => a.date - b.date);
 
+    // Day 0 of the vencimento's month rolls back to the last day of the
+    // previous month — the "data de fechamento contábil" some accountants
+    // want to post the whole fatura on, instead of each purchase's own date.
+    const lastDayPrevMonth = new Date(Date.UTC(vencDate.getUTCFullYear(), vencDate.getUTCMonth(), 0));
+
     return {
       docType: 'creditcard',
-      cardLast4, vencDate, totalFatura, sections, transactions,
+      cardLast4, vencDate, totalFatura, sections, transactions, lastDayPrevMonth,
       holders: sections.map(s => s.holder).join(', '),
     };
   }
@@ -774,23 +780,27 @@ function buildInvestmentOFX(result) {
 }
 
 function buildCreditCardOFX(result) {
-  const { transactions, vencDate, totalFatura } = result;
+  const { transactions, vencDate, totalFatura, lastDayPrevMonth } = result;
   const mult = document.getElementById('cInvert').checked ? -1 : 1;
-  const periodStart = transactions[0].date;
-  const periodEnd = transactions[transactions.length - 1].date;
+  const useMonthEnd = document.getElementById('cUseMonthEnd').checked;
+  const periodStart = useMonthEnd ? lastDayPrevMonth : transactions[0].date;
+  const periodEnd = useMonthEnd ? lastDayPrevMonth : transactions[transactions.length - 1].date;
   const trnLines = transactions.map(t => {
     const amount = t.amount * mult;
+    const postDate = useMonthEnd ? lastDayPrevMonth : t.date;
     const type = amount >= 0 ? 'DEBIT' : 'CREDIT';
     const name = escapeOfx(t.description).slice(0, 60);
+    const memo = useMonthEnd ? `Data da compra: ${fmtDateBR(t.date)}` : '';
     return [
       '<STMTTRN>',
       `<TRNTYPE>${type}`,
-      `<DTPOSTED>${fmtOfxDate(t.date)}`,
+      `<DTPOSTED>${fmtOfxDate(postDate)}`,
       `<TRNAMT>${amount.toFixed(2)}`,
       `<FITID>${t.fitid}`,
       `<NAME>${name}`,
+      memo ? `<MEMO>${escapeOfx(memo)}` : null,
       '</STMTTRN>',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }).join('\n');
 
   return buildOfxEnvelope({
@@ -846,8 +856,10 @@ function downloadInvestmentXlsx(result) {
 
 function downloadCreditCardXlsx(result) {
   const mult = document.getElementById('cInvert').checked ? -1 : 1;
+  const useMonthEnd = document.getElementById('cUseMonthEnd').checked;
   const rows = result.transactions.map(t => ({
-    Data: fmtDateBR(t.date),
+    Data: fmtDateBR(useMonthEnd ? result.lastDayPrevMonth : t.date),
+    'Data da compra': fmtDateBR(t.date),
     Descrição: t.description,
     Valor: t.amount * mult,
   }));
@@ -1005,13 +1017,15 @@ function renderCreditCard(result) {
   }
 
   const cMult = document.getElementById('cInvert').checked ? -1 : 1;
+  const useMonthEnd = document.getElementById('cUseMonthEnd').checked;
   const tbody = document.querySelector('#creditCardTable tbody');
   tbody.innerHTML = '';
   for (const t of result.transactions) {
     const v = t.amount * cMult;
+    const postDate = useMonthEnd ? result.lastDayPrevMonth : t.date;
     const tr = document.createElement('tr');
     const cls = v < 0 ? 'neg' : 'pos';
-    tr.innerHTML = `<td>${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="num ${cls}">${fmtBRL(v)}</td>`;
+    tr.innerHTML = `<td>${fmtDateBR(postDate)}</td><td class="memo-cell">${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="num ${cls}">${fmtBRL(v)}</td>`;
     tbody.appendChild(tr);
   }
   creditCardCard.classList.remove('hidden');
@@ -1028,6 +1042,9 @@ document.getElementById('iInvert').addEventListener('change', () => {
   if (currentResult && currentResult.docType === 'investment') renderInvestment(currentResult);
 });
 document.getElementById('cInvert').addEventListener('change', () => {
+  if (currentResult && currentResult.docType === 'creditcard') renderCreditCard(currentResult);
+});
+document.getElementById('cUseMonthEnd').addEventListener('change', () => {
   if (currentResult && currentResult.docType === 'creditcard') renderCreditCard(currentResult);
 });
 
