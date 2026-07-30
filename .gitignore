@@ -1,0 +1,3 @@
+# Contém dados reais de clientes — nunca deve ir para o GitHub
+/dev/testdata/
+/fixtures/

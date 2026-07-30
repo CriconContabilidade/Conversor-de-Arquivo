@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conversor de Extrato Bancário → OFX/Excel</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --ink:#1A1A1A;
+  --ink-soft:#65656B;
+  --paper:#E7E6E2;
+  --paper-raised:#FFFFFF;
+  --rule:#D6D5D1;
+  --rule-strong:#A9A7A2;
+  --red:#A6392C;
+  --red-bg:#F6E1DC;
+  --green-ink:#1F5E3C;
+  --green-bg:#DEEEE3;
+  --amber:#8A6400;
+  --amber-bg:#FCEEA9;
+  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 4px 14px rgba(0,0,0,0.06);
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:'IBM Plex Sans',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.app{max-width:1000px;margin:0 auto;padding:28px 20px 80px;}
+
+.topbar{
+  padding-bottom:18px;margin-bottom:22px;
+  border-bottom:2px solid var(--ink);
+}
+.brand h1{
+  font-family:'Source Serif 4',serif;
+  font-size:26px;font-weight:800;margin:0 0 4px;letter-spacing:-0.01em;
+}
+.brand .sub{font-size:13px;color:var(--ink-soft);}
+
+.card{
+  background:var(--paper-raised);border:1.5px solid var(--ink);border-radius:6px;
+  box-shadow:var(--shadow); padding:20px; margin-bottom:20px;
+}
+
+.dropzone{
+  border:2px dashed var(--rule-strong); border-radius:6px; padding:36px 20px;
+  text-align:center; cursor:pointer; transition: background .15s, border-color .15s;
+}
+.dropzone:hover, .dropzone.drag{ background: rgba(0,0,0,0.03); border-color: var(--ink); }
+.dropzone .big{font-size:15px;font-weight:600;margin-bottom:6px;}
+.dropzone .small{font-size:12.5px;color:var(--ink-soft);}
+input[type=file]{display:none;}
+
+.btn{
+  padding:9px 16px;border-radius:4px;border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);
+  cursor:pointer;font-weight:600;font-size:13.5px;transition:transform .08s ease, opacity .15s;
+  font-family:'IBM Plex Sans',sans-serif;
+}
+.btn:hover{opacity:.88;}
+.btn:active{transform:translateY(1px);}
+.btn.ghost{background:transparent;color:var(--ink);}
+.btn.ghost:hover{background:rgba(0,0,0,0.06);}
+.btn:disabled{opacity:.35;cursor:not-allowed;}
+.btn-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+
+.status-line{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);margin-top:10px;}
+.status-line.err{color:var(--red);}
+
+.badge{
+  display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.03em;
+  padding:3px 9px;border-radius:10px;font-weight:600;
+}
+.badge.ok{background:var(--green-bg);color:var(--green-ink);}
+.badge.warn{background:var(--amber-bg);color:var(--amber);}
+.badge.err{background:var(--red-bg);color:var(--red);}
+
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:6px;}
+.field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);margin-bottom:4px;font-family:'IBM Plex Mono',monospace;}
+.field input, .field select{
+  width:100%;padding:7px 9px;border:1.5px solid var(--rule-strong);border-radius:4px;font-size:13.5px;
+  font-family:'IBM Plex Mono',monospace;background:var(--paper-raised);color:var(--ink);
+}
+.field input:focus, .field select:focus{outline:none;border-color:var(--ink);}
+
+.summary-row{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0;font-size:13px;}
+.summary-row .item .k{color:var(--ink-soft);font-size:11px;text-transform:uppercase;letter-spacing:.03em;font-family:'IBM Plex Mono',monospace;}
+.summary-row .item .v{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:15px;}
+
+table.preview{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
+table.preview th{
+  text-align:left;padding:8px 10px;border-bottom:1.5px solid var(--rule-strong);
+  font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);
+  position:sticky;top:0;background:var(--paper-raised);
+}
+table.preview td{padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top;}
+table.preview td.num{text-align:right;font-family:'IBM Plex Mono',monospace;white-space:nowrap;}
+table.preview td.num.neg{color:var(--red);}
+table.preview td.num.pos{color:var(--green-ink);}
+.table-wrap{max-height:420px;overflow:auto;border:1px solid var(--rule);border-radius:4px;}
+.memo-cell{color:var(--ink-soft);font-size:11.5px;}
+
+.hidden{display:none !important;}
+.section-title{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin:0 0 12px;color:var(--ink-soft);font-family:'IBM Plex Mono',monospace;}
+footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand">
+      <h1>Conversor de Extrato → OFX / Excel</h1>
+      <div class="sub">Processamento 100% local no navegador — nenhum arquivo é enviado a servidor algum</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="dropzone" class="dropzone">
+      <div class="big">Arraste um PDF de extrato aqui, ou clique para escolher</div>
+      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Unicred (Demonstrativo de Rentabilidade)</div>
+      <input type="file" id="fileInput" accept="application/pdf">
+    </div>
+    <div id="statusLine" class="status-line hidden"></div>
+  </div>
+
+  <!-- CHECKING ACCOUNT RESULT -->
+  <div id="checkingCard" class="card hidden">
+    <div class="section-title">Conta identificada</div>
+    <div class="fields">
+      <div class="field"><label>Banco / Cooperativa</label><input id="fBankId" type="text"></div>
+      <div class="field"><label>Agência</label><input id="fBranchId" type="text"></div>
+      <div class="field"><label>Conta</label><input id="fAccountId" type="text"></div>
+      <div class="field"><label>Tipo de conta</label>
+        <select id="fAccountType">
+          <option value="CHECKING">Conta corrente</option>
+          <option value="SAVINGS">Poupança</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="summary-row">
+      <div class="item"><div class="k">Período</div><div class="v" id="sPeriod">—</div></div>
+      <div class="item"><div class="k">Saldo inicial</div><div class="v" id="sOpening">—</div></div>
+      <div class="item"><div class="k">Saldo final</div><div class="v" id="sClosing">—</div></div>
+      <div class="item"><div class="k">Lançamentos</div><div class="v" id="sCount">—</div></div>
+      <div class="item"><div class="k">Conferência</div><div class="v" id="sCheck">—</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="preview" id="checkingTable">
+        <thead><tr><th>Data</th><th>Histórico</th><th>Detalhe</th><th>Valor</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="btnOfx">Baixar OFX</button>
+      <button class="btn ghost" id="btnXlsxChecking">Baixar Excel</button>
+    </div>
+  </div>
+
+  <!-- INVESTMENT STATEMENT RESULT -->
+  <div id="investmentCard" class="card hidden">
+    <div class="section-title">Demonstrativo de aplicação identificado</div>
+    <div class="summary-row">
+      <div class="item"><div class="k">Cliente / Conta</div><div class="v" id="iAccount">—</div></div>
+      <div class="item"><div class="k">Período</div><div class="v" id="iPeriod">—</div></div>
+      <div class="item"><div class="k">Títulos</div><div class="v" id="iCount">—</div></div>
+      <div class="item"><div class="k">Rendimento no período</div><div class="v" id="iRend">—</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="preview" id="investmentTable">
+        <thead><tr><th>Data</th><th>Tipo</th><th>Histórico</th><th>Valor</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn ghost" id="btnXlsxInvestment">Baixar Excel</button>
+    </div>
+  </div>
+
+  <footer>Conversor local · nenhum dado sai do seu computador</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+// =====================================================================
+// PDF TEXT EXTRACTION — reconstructs reading-order lines from pdf.js
+// positioned text items (pdf.js text order is not guaranteed to match
+// visual reading order, and some PDFs place adjacent table cells with
+// no literal space character between them, relying on x-position gaps).
+// =====================================================================
+async function extractText(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pageTexts = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    // Apply the page's viewport transform (handles /Rotate, e.g. wide tables
+    // stored rotated 90° in a portrait page) so item coordinates reflect true
+    // on-screen position instead of raw PDF user space. In viewport space,
+    // y increases downward (top of page = smallest y).
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const items = content.items
+      .filter(it => it.str !== undefined)
+      .map(it => {
+        const tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+        return {
+          str: it.str,
+          x: tx[4],
+          y: tx[5],
+          w: it.width || (it.str.length * Math.abs(it.transform[0] || 5)),
+        };
+      });
+
+    // Group into lines by y-position. Some cells (e.g. a wrapped amount like
+    // "1.200,00" over "D") straddle the row's main baseline by a few points
+    // above/below rather than sharing it exactly, so we chain-cluster: sort
+    // all items top-to-bottom and merge an item into the previous row when
+    // it's within Y_CHAIN_TOL of the row's most recent item (transitive —
+    // the anchor moves as items are added). A real new line (~12pt away)
+    // stays separate; a wrapped sub-line (~5pt away) gets folded in.
+    const Y_CHAIN_TOL = 6.5;
+    const sorted = items.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    const rows = [];
+    for (const it of sorted) {
+      const last = rows[rows.length - 1];
+      if (last && Math.abs(last.y - it.y) < Y_CHAIN_TOL) {
+        last.items.push(it);
+        last.y = it.y;
+      } else {
+        rows.push({ y: it.y, items: [it] });
+      }
+    }
+    for (const row of rows) row.items.sort((a, b) => a.x - b.x);
+
+    const lines = rows.map(row => {
+      let line = '';
+      let prevEnd = null;
+      for (const it of row.items) {
+        const str = it.str;
+        if (str.trim() === '') continue;
+        if (prevEnd !== null) {
+          const gap = it.x - prevEnd;
+          if (gap > 0.6 || !/\s$/.test(line)) {
+            if (gap > 0.6 || line.length) line += ' ';
+          }
+        }
+        line += str;
+        prevEnd = it.x + it.w;
+      }
+      return line.replace(/\s+/g, ' ').trim();
+    }).filter(l => l.length > 0);
+
+    pageTexts.push(lines.join('\n'));
+  }
+  return pageTexts.join('\n');
+}
+
+// =====================================================================
+// SHARED HELPERS
+// =====================================================================
+function parseBRL(str) {
+  return parseFloat(String(str).replace(/\./g, '').replace(',', '.'));
+}
+function fmtBRL(n) {
+  return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function brToDate(str) {
+  const [d, m, y] = str.split('/').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+function fmtISO(d) { return d.toISOString().slice(0, 10); }
+function fmtOfxDate(d) {
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+}
+function fmtDateBR(d) {
+  return d.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+}
+
+// =====================================================================
+// PARSER REGISTRY — pluggable per bank / document type.
+// Each parser: { id, bank, docType, label, detect(text) -> bool, parse(text) -> result }
+// =====================================================================
+const PARSERS = [];
+
+// ---- Sicoob · Extrato Conta Corrente -------------------------------
+PARSERS.push({
+  id: 'sicoob-checking',
+  bank: 'Sicoob',
+  docType: 'checking',
+  label: 'Sicoob — Extrato Conta Corrente',
+  detect(text) {
+    return /SICOOB/.test(text) && /EXTRATO CONTA CORRENTE/.test(text);
+  },
+  parse(rawText) {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    const periodMatch = rawText.match(/PER[ÍI]ODO:\s*(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/);
+    if (!periodMatch) throw new Error('Não foi possível identificar o período do extrato.');
+    const periodStart = brToDate(periodMatch[1]);
+    const periodEnd = brToDate(periodMatch[2]);
+
+    const coopMatch = rawText.match(/COOP\.?:\s*([\d-]+)\s*\/\s*(.+)/);
+    const contaMatch = rawText.match(/CONTA:\s*([\d.-]+)\s*\/\s*(.+)/);
+    let bankId = '', branchId = '0';
+    if (coopMatch) {
+      const parts = coopMatch[1].split('-');
+      bankId = parts[0];
+      branchId = parts[1] || '0';
+    }
+    const bankInfo = {
+      bankId, branchId,
+      bankName: coopMatch ? coopMatch[2].trim() : '',
+      accountId: contaMatch ? contaMatch[1].trim().replace(/\./g, '') : '',
+      accountHolder: contaMatch ? contaMatch[2].trim() : '',
+    };
+
+    const TXN_LINE = /^(\d{2}\/\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})\s*([CD])?\*?$/;
+    const ONLY_SUFFIX = /^([CD])\*?$/;
+
+    const startIdx = lines.findIndex(l => l === 'DATA HISTÓRICO VALOR' || l === 'HISTÓRICO DE MOVIMENTAÇÃO');
+    const endIdx = lines.findIndex(l => l === 'RESUMO');
+    const body = lines.slice(startIdx >= 0 ? startIdx + 1 : 0, endIdx >= 0 ? endIdx : lines.length);
+
+    const transactions = [];
+    let closingBalance = null, closingBalanceDate = null;
+    let openingBalance = null, openingBalanceDate = null;
+    let firstSaldoSeen = false;
+    let txnCounter = 0;
+
+    for (let idx = 0; idx < body.length; idx++) {
+      const line = body[idx];
+      const m = line.match(TXN_LINE);
+      if (!m) continue;
+      let [, dateStr, desc, valueStr, suffix] = m;
+
+      if (!suffix) {
+        const next = body[idx + 1];
+        if (next && ONLY_SUFFIX.test(next)) {
+          suffix = next.match(ONLY_SUFFIX)[1];
+          idx++;
+        }
+      }
+
+      const [d, mth] = dateStr.split('/').map(Number);
+      let year = periodEnd.getUTCFullYear();
+      if (mth > periodEnd.getUTCMonth() + 1) year -= 1;
+      const date = new Date(Date.UTC(year, mth - 1, d));
+      const amountAbs = parseBRL(valueStr);
+      const isSaldo = /^SALDO/.test(desc);
+
+      if (isSaldo) {
+        if (!firstSaldoSeen) {
+          closingBalance = suffix === 'D' ? -amountAbs : amountAbs;
+          closingBalanceDate = date;
+          firstSaldoSeen = true;
+        }
+        if (desc === 'SALDO ANTERIOR') {
+          openingBalance = suffix === 'D' ? -amountAbs : amountAbs;
+          openingBalanceDate = date;
+        }
+        continue;
+      }
+
+      const memoParts = [];
+      let j = idx + 1;
+      while (j < body.length) {
+        const l2 = body[j];
+        if (TXN_LINE.test(l2)) break;
+        if (ONLY_SUFFIX.test(l2)) { j++; continue; }
+        memoParts.push(l2);
+        j++;
+      }
+      idx = j - 1;
+
+      txnCounter++;
+      const amount = suffix === 'D' ? -amountAbs : amountAbs;
+      transactions.push({
+        date,
+        description: desc.trim(),
+        memo: memoParts.join(' | '),
+        amount,
+        fitid: `${fmtOfxDate(date)}${String(txnCounter).padStart(4, '0')}`,
+      });
+    }
+
+    if (openingBalance === null || closingBalance === null) {
+      throw new Error('Não foi possível localizar o saldo inicial/final do extrato.');
+    }
+
+    return { docType: 'checking', bankInfo, periodStart, periodEnd, openingBalance, openingBalanceDate, closingBalance, closingBalanceDate, transactions };
+  }
+});
+
+// ---- Unicred · Demonstrativo de Rentabilidade (aplicação) ----------
+PARSERS.push({
+  id: 'unicred-investment',
+  bank: 'Unicred',
+  docType: 'investment',
+  label: 'Unicred — Demonstrativo de Rentabilidade',
+  detect(text) {
+    return /UNICRED/i.test(text) && /Demonstrativo de Rentabilidade/i.test(text);
+  },
+  parse(rawText) {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    const periodMatch = rawText.match(/Per[íi]odo de\s*(\d{2}\/\d{2}\/\d{4})\s*a\s*(\d{2}\/\d{2}\/\d{4})/);
+    if (!periodMatch) throw new Error('Não foi possível identificar o período do demonstrativo.');
+    const periodStart = brToDate(periodMatch[1]);
+    const periodEnd = brToDate(periodMatch[2]);
+
+    const contaMatch = rawText.match(/Coop:\s*(\S+)\s*-\s*AG:\s*(\S+)\s*-\s*Conta:\s*(\S+)/);
+    const clientMatch = rawText.match(/^(.+ - [\d.]+\/\d{4}-\d{2})$/m) || rawText.match(/^(.+ LTDA.*)$/m);
+
+    const TITLE_ROW = /^(\S+)\s+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d.]+,\d{2})\s+([\d.,]+%)\s+(\S+)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$/;
+
+    const titulos = [];
+    for (const line of lines) {
+      const m = line.match(TITLE_ROW);
+      if (!m) continue;
+      const [, titulo, dataAplicacaoStr, dataVencimentoStr, valorAplicadoStr, remuneracaoPct, remuneracaoIdx,
+        saldoBrutoAnteriorStr, resgateStr, reversaoStr, rendimentoPagoStr, iofStr, irStr,
+        rendimentoPeriodoStr, rendimentoAcumuladoStr, impostosProvStr, saldoBrutoAtualStr] = m;
+
+      titulos.push({
+        titulo,
+        dataAplicacao: brToDate(dataAplicacaoStr),
+        dataVencimento: brToDate(dataVencimentoStr),
+        valorAplicado: parseBRL(valorAplicadoStr),
+        remuneracao: `${remuneracaoPct} ${remuneracaoIdx}`,
+        saldoBrutoAnterior: parseBRL(saldoBrutoAnteriorStr),
+        resgate: parseBRL(resgateStr),
+        reversao: parseBRL(reversaoStr),
+        rendimentoPago: parseBRL(rendimentoPagoStr),
+        iofRetido: parseBRL(iofStr),
+        irRetido: parseBRL(irStr),
+        rendimentoPeriodo: parseBRL(rendimentoPeriodoStr),
+        rendimentoAcumulado: parseBRL(rendimentoAcumuladoStr),
+        impostosProvisionados: parseBRL(impostosProvStr),
+        saldoBrutoAtual: parseBRL(saldoBrutoAtualStr),
+      });
+    }
+
+    if (titulos.length === 0) throw new Error('Nenhum título foi reconhecido no demonstrativo.');
+
+    const periodEndStr = fmtDateBR(periodEnd);
+    const within = (d) => d >= periodStart && d <= periodEnd;
+    const events = [];
+    for (const t of titulos) {
+      if (within(t.dataAplicacao)) {
+        events.push({ data: t.dataAplicacao, historico: `Aplicação ${t.titulo}`, valor: t.valorAplicado, tipo: 'Aplicação', titulo: t.titulo });
+      }
+      if (t.rendimentoPeriodo !== 0) {
+        events.push({ data: periodEnd, historico: `${periodEndStr} / ${t.titulo}`, valor: t.rendimentoPeriodo, tipo: 'Rendimento', titulo: t.titulo });
+      }
+      if (t.irRetido > 0) {
+        events.push({ data: periodEnd, historico: `IRRF (come-cotas) ${t.titulo}`, valor: -t.irRetido, tipo: 'IRRF', titulo: t.titulo });
+      }
+      if (t.resgate > 0) {
+        const dataResgate = within(t.dataVencimento) ? t.dataVencimento : periodEnd;
+        events.push({ data: dataResgate, historico: `Resgate ${t.titulo}`, valor: t.resgate, tipo: 'Resgate', titulo: t.titulo });
+      }
+    }
+    events.sort((a, b) => a.data - b.data);
+
+    return {
+      docType: 'investment',
+      client: clientMatch ? clientMatch[1] : '',
+      account: contaMatch ? { coop: contaMatch[1], agencia: contaMatch[2], conta: contaMatch[3] } : null,
+      periodStart, periodEnd, titulos, events,
+    };
+  }
+});
+
+// =====================================================================
+// OFX GENERATOR (SGML 1.0.2)
+// =====================================================================
+function escapeOfx(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function buildOFX(result) {
+  const { bankInfo, transactions, periodStart, periodEnd, closingBalance, closingBalanceDate } = result;
+  const now = fmtOfxDate(new Date());
+  const trnLines = transactions.map(t => {
+    const type = t.amount >= 0 ? 'CREDIT' : 'DEBIT';
+    const name = escapeOfx(t.description).slice(0, 60);
+    const memo = escapeOfx(t.memo).slice(0, 255);
+    return [
+      '<STMTTRN>',
+      `<TRNTYPE>${type}`,
+      `<DTPOSTED>${fmtOfxDate(t.date)}`,
+      `<TRNAMT>${t.amount.toFixed(2)}`,
+      `<FITID>${t.fitid}`,
+      `<NAME>${name}`,
+      memo ? `<MEMO>${memo}` : null,
+      '</STMTTRN>',
+    ].filter(Boolean).join('\n');
+  }).join('\n');
+
+  return `OFXHEADER:100
+DATA:OFXSGML
+VERSION:102
+SECURITY:NONE
+ENCODING:USASCII
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:NONE
+
+<OFX>
+<SIGNONMSGSRSV1>
+<SONRS>
+<STATUS>
+<CODE>0
+<SEVERITY>INFO
+</STATUS>
+<DTSERVER>${now}
+<LANGUAGE>POR
+</SONRS>
+</SIGNONMSGSRSV1>
+<BANKMSGSRSV1>
+<STMTTRNRS>
+<TRNUID>1
+<STATUS>
+<CODE>0
+<SEVERITY>INFO
+</STATUS>
+<STMTRS>
+<CURDEF>BRL
+<BANKACCTFROM>
+<BANKID>${escapeOfx(bankInfo.bankId)}
+<BRANCHID>${escapeOfx(bankInfo.branchId)}
+<ACCTID>${escapeOfx(bankInfo.accountId)}
+<ACCTTYPE>${document.getElementById('fAccountType').value}
+</BANKACCTFROM>
+<BANKTRANLIST>
+<DTSTART>${fmtOfxDate(periodStart)}
+<DTEND>${fmtOfxDate(periodEnd)}
+${trnLines}
+</BANKTRANLIST>
+<LEDGERBAL>
+<BALAMT>${closingBalance.toFixed(2)}
+<DTASOF>${fmtOfxDate(closingBalanceDate)}
+</LEDGERBAL>
+</STMTRS>
+</STMTTRNRS>
+</BANKMSGSRSV1>
+</OFX>`;
+}
+
+function downloadText(filename, content, mime) {
+  const blob = new Blob([content], { type: mime || 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// =====================================================================
+// EXCEL GENERATORS
+// =====================================================================
+function downloadChecklingXlsx(result) {
+  const rows = result.transactions.map(t => ({
+    Data: fmtDateBR(t.date),
+    Histórico: t.description,
+    Detalhe: t.memo,
+    Valor: t.amount,
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Extrato');
+  XLSX.writeFile(wb, `extrato-${fmtISO(result.periodStart)}-a-${fmtISO(result.periodEnd)}.xlsx`);
+}
+
+function downloadInvestmentXlsx(result) {
+  const rows = result.events.map(e => ({
+    Data: fmtDateBR(e.data),
+    Tipo: e.tipo,
+    Histórico: e.historico,
+    Valor: e.valor,
+    Título: e.titulo,
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Aplicação');
+  XLSX.writeFile(wb, `aplicacao-${fmtISO(result.periodStart)}-a-${fmtISO(result.periodEnd)}.xlsx`);
+}
+
+// =====================================================================
+// UI WIRING
+// =====================================================================
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const statusLine = document.getElementById('statusLine');
+const checkingCard = document.getElementById('checkingCard');
+const investmentCard = document.getElementById('investmentCard');
+
+let currentResult = null;
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+function setStatus(msg, isErr) {
+  statusLine.textContent = msg;
+  statusLine.classList.remove('hidden');
+  statusLine.classList.toggle('err', !!isErr);
+}
+
+async function handleFile(file) {
+  checkingCard.classList.add('hidden');
+  investmentCard.classList.add('hidden');
+  setStatus('Lendo PDF…');
+  try {
+    const text = await extractText(file);
+    const parser = PARSERS.find(p => p.detect(text));
+    if (!parser) {
+      setStatus('Banco/documento ainda não suportado. Formatos disponíveis: ' + PARSERS.map(p => p.label).join(', '), true);
+      return;
+    }
+    setStatus(`Detectado: ${parser.label} — processando…`);
+    const result = parser.parse(text);
+    currentResult = result;
+    if (result.docType === 'checking') renderChecking(result);
+    else if (result.docType === 'investment') renderInvestment(result);
+    setStatus(`Detectado: ${parser.label} — ${file.name}`);
+  } catch (err) {
+    console.error(err);
+    setStatus('Erro ao processar o PDF: ' + err.message, true);
+  }
+}
+
+function renderChecking(result) {
+  document.getElementById('fBankId').value = result.bankInfo.bankId;
+  document.getElementById('fBranchId').value = result.bankInfo.branchId;
+  document.getElementById('fAccountId').value = result.bankInfo.accountId;
+
+  document.getElementById('sPeriod').textContent = `${fmtDateBR(result.periodStart)} a ${fmtDateBR(result.periodEnd)}`;
+  document.getElementById('sOpening').textContent = `R$ ${fmtBRL(result.openingBalance)}`;
+  document.getElementById('sClosing').textContent = `R$ ${fmtBRL(result.closingBalance)}`;
+  document.getElementById('sCount').textContent = result.transactions.length;
+
+  const sum = result.transactions.reduce((s, t) => s + t.amount, 0);
+  const expected = result.closingBalance - result.openingBalance;
+  const diff = Math.round((sum - expected) * 100) / 100;
+  const checkEl = document.getElementById('sCheck');
+  if (Math.abs(diff) < 0.01) {
+    checkEl.innerHTML = '<span class="badge ok">✓ confere</span>';
+  } else {
+    checkEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diff)}</span>`;
+  }
+
+  const tbody = document.querySelector('#checkingTable tbody');
+  tbody.innerHTML = '';
+  for (const t of result.transactions) {
+    const tr = document.createElement('tr');
+    const cls = t.amount < 0 ? 'neg' : 'pos';
+    tr.innerHTML = `<td>${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="memo-cell">${escapeHtml(t.memo)}</td><td class="num ${cls}">${fmtBRL(t.amount)}</td>`;
+    tbody.appendChild(tr);
+  }
+  checkingCard.classList.remove('hidden');
+}
+
+function renderInvestment(result) {
+  document.getElementById('iAccount').textContent = result.account ? `Coop ${result.account.coop} / AG ${result.account.agencia} / Conta ${result.account.conta}` : (result.client || '—');
+  document.getElementById('iPeriod').textContent = `${fmtDateBR(result.periodStart)} a ${fmtDateBR(result.periodEnd)}`;
+  document.getElementById('iCount').textContent = result.titulos.length;
+  const totalRend = result.titulos.reduce((s, t) => s + t.rendimentoPeriodo, 0);
+  document.getElementById('iRend').textContent = `R$ ${fmtBRL(totalRend)}`;
+
+  const tbody = document.querySelector('#investmentTable tbody');
+  tbody.innerHTML = '';
+  for (const e of result.events) {
+    const tr = document.createElement('tr');
+    const cls = e.valor < 0 ? 'neg' : 'pos';
+    tr.innerHTML = `<td>${fmtDateBR(e.data)}</td><td>${escapeHtml(e.tipo)}</td><td>${escapeHtml(e.historico)}</td><td class="num ${cls}">${fmtBRL(e.valor)}</td>`;
+    tbody.appendChild(tr);
+  }
+  investmentCard.classList.remove('hidden');
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+document.getElementById('btnOfx').addEventListener('click', () => {
+  if (!currentResult) return;
+  const ofx = buildOFX(currentResult);
+  downloadText(`extrato-${fmtISO(currentResult.periodStart)}-a-${fmtISO(currentResult.periodEnd)}.ofx`, ofx, 'application/x-ofx');
+});
+document.getElementById('btnXlsxChecking').addEventListener('click', () => {
+  if (currentResult) downloadChecklingXlsx(currentResult);
+});
+document.getElementById('btnXlsxInvestment').addEventListener('click', () => {
+  if (currentResult) downloadInvestmentXlsx(currentResult);
+});
+</script>
+</body>
+</html>
