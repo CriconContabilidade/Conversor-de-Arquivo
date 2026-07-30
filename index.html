@@ -183,6 +183,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
       <div class="item"><div class="k">Período</div><div class="v" id="iPeriod">—</div></div>
       <div class="item"><div class="k">Títulos</div><div class="v" id="iCount">—</div></div>
       <div class="item"><div class="k">Rendimento no período</div><div class="v" id="iRend">—</div></div>
+      <div class="item"><div class="k">Conferência</div><div class="v" id="iCheck">—</div></div>
     </div>
 
     <div class="table-wrap">
@@ -482,16 +483,19 @@ PARSERS.push({
       }
       if (t.resgate > 0) {
         const dataResgate = within(t.dataVencimento) ? t.dataVencimento : periodEnd;
-        events.push({ data: dataResgate, historico: `Resgate ${t.titulo}`, valor: t.resgate, tipo: 'Resgate', titulo: t.titulo });
+        events.push({ data: dataResgate, historico: `Resgate ${t.titulo}`, valor: -t.resgate, tipo: 'Resgate', titulo: t.titulo });
       }
     }
     events.sort((a, b) => a.data - b.data);
+
+    const openingBalance = titulos.reduce((s, t) => s + t.saldoBrutoAnterior, 0);
+    const closingBalance = titulos.reduce((s, t) => s + t.saldoBrutoAtual, 0);
 
     return {
       docType: 'investment',
       client: clientMatch ? clientMatch[1] : '',
       account: contaMatch ? { coop: contaMatch[1], agencia: contaMatch[2], conta: contaMatch[3] } : null,
-      periodStart, periodEnd, titulos, events,
+      periodStart, periodEnd, titulos, events, openingBalance, closingBalance,
     };
   }
 });
@@ -599,7 +603,7 @@ function eventMemo(e) {
   return `${label} ( DOC.: ${e.titulo} )`;
 }
 function buildInvestmentOFX(result) {
-  const { events, periodStart, periodEnd, titulos } = result;
+  const { events, periodStart, periodEnd, closingBalance } = result;
   const fitidSeen = {};
   let checknum = 0;
   const trnLines = events.map(e => {
@@ -619,15 +623,13 @@ function buildInvestmentOFX(result) {
     ].join('\n');
   }).join('\n');
 
-  const totalSaldo = titulos.reduce((s, t) => s + t.saldoBrutoAtual, 0);
-
   return buildOfxEnvelope({
     bankId: document.getElementById('iBankId').value,
     branchId: document.getElementById('iBranchId').value,
     accountId: document.getElementById('iAccountId').value,
     acctType: document.getElementById('iAccountType').value,
     periodStart, periodEnd, trnLines,
-    balAmt: totalSaldo, balDate: periodEnd,
+    balAmt: closingBalance, balDate: periodEnd,
   });
 }
 
@@ -761,6 +763,16 @@ function renderInvestment(result) {
   document.getElementById('iCount').textContent = result.titulos.length;
   const totalRend = result.titulos.reduce((s, t) => s + t.rendimentoPeriodo, 0);
   document.getElementById('iRend').textContent = `R$ ${fmtBRL(totalRend)}`;
+
+  const sum = result.events.reduce((s, e) => s + e.valor, 0);
+  const expected = result.closingBalance - result.openingBalance;
+  const diff = Math.round((sum - expected) * 100) / 100;
+  const iCheckEl = document.getElementById('iCheck');
+  if (Math.abs(diff) < 0.01) {
+    iCheckEl.innerHTML = '<span class="badge ok">✓ confere</span>';
+  } else {
+    iCheckEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diff)}</span>`;
+  }
 
   const tbody = document.querySelector('#investmentTable tbody');
   tbody.innerHTML = '';
