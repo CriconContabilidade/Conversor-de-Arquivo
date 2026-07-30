@@ -71,6 +71,9 @@ input[type=file]{display:none;}
 .status-line{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);margin-top:10px;}
 .status-line.err{color:var(--red);}
 
+.invert-toggle{display:flex;align-items:center;gap:7px;font-size:13px;margin-bottom:14px;cursor:pointer;user-select:none;}
+.invert-toggle input{width:15px;height:15px;cursor:pointer;}
+
 .badge{
   display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.03em;
   padding:3px 9px;border-radius:10px;font-weight:600;
@@ -142,6 +145,8 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
       </div>
     </div>
 
+    <label class="invert-toggle"><input type="checkbox" id="fInvert"> Inverter valores (troca soma por subtração e vice-versa)</label>
+
     <div class="summary-row">
       <div class="item"><div class="k">Período</div><div class="v" id="sPeriod">—</div></div>
       <div class="item"><div class="k">Saldo inicial</div><div class="v" id="sOpening">—</div></div>
@@ -177,6 +182,8 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
         </select>
       </div>
     </div>
+
+    <label class="invert-toggle"><input type="checkbox" id="iInvert"> Inverter valores (troca soma por subtração e vice-versa)</label>
 
     <div class="summary-row">
       <div class="item"><div class="k">Cliente</div><div class="v" id="iClient">—</div></div>
@@ -561,15 +568,17 @@ ${trnLines}
 
 function buildOFX(result) {
   const { bankInfo, transactions, periodStart, periodEnd, closingBalance, closingBalanceDate } = result;
+  const mult = document.getElementById('fInvert').checked ? -1 : 1;
   const trnLines = transactions.map(t => {
-    const type = t.amount >= 0 ? 'CREDIT' : 'DEBIT';
+    const amount = t.amount * mult;
+    const type = amount >= 0 ? 'CREDIT' : 'DEBIT';
     const name = escapeOfx(t.description).slice(0, 60);
     const memo = escapeOfx(t.memo).slice(0, 255);
     return [
       '<STMTTRN>',
       `<TRNTYPE>${type}`,
       `<DTPOSTED>${fmtOfxDate(t.date)}`,
-      `<TRNAMT>${t.amount.toFixed(2)}`,
+      `<TRNAMT>${amount.toFixed(2)}`,
       `<FITID>${t.fitid}`,
       `<NAME>${name}`,
       memo ? `<MEMO>${memo}` : null,
@@ -604,6 +613,7 @@ function eventMemo(e) {
 }
 function buildInvestmentOFX(result) {
   const { events, periodStart, periodEnd, closingBalance } = result;
+  const mult = document.getElementById('iInvert').checked ? -1 : 1;
   const fitidSeen = {};
   let checknum = 0;
   const trnLines = events.map(e => {
@@ -615,7 +625,7 @@ function buildInvestmentOFX(result) {
       '<STMTTRN>',
       '<TRNTYPE>OTHER',
       `<DTPOSTED>${fmtOfxDate(e.data)}`,
-      `<TRNAMT>${e.valor.toFixed(2)}`,
+      `<TRNAMT>${(e.valor * mult).toFixed(2)}`,
       `<FITID>${escapeOfx(fitid)}`,
       `<CHECKNUM>${checknum}`,
       `<MEMO>${escapeOfx(eventMemo(e))}`,
@@ -646,11 +656,12 @@ function downloadText(filename, content, mime) {
 // EXCEL GENERATORS
 // =====================================================================
 function downloadChecklingXlsx(result) {
+  const mult = document.getElementById('fInvert').checked ? -1 : 1;
   const rows = result.transactions.map(t => ({
     Data: fmtDateBR(t.date),
     Histórico: t.description,
     Detalhe: t.memo,
-    Valor: t.amount,
+    Valor: t.amount * mult,
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
@@ -659,11 +670,12 @@ function downloadChecklingXlsx(result) {
 }
 
 function downloadInvestmentXlsx(result) {
+  const mult = document.getElementById('iInvert').checked ? -1 : 1;
   const rows = result.events.map(e => ({
     Data: fmtDateBR(e.data),
     Tipo: e.tipo,
     Histórico: e.historico,
-    Valor: e.valor,
+    Valor: e.valor * mult,
     Título: e.titulo,
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -743,12 +755,14 @@ function renderChecking(result) {
     checkEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diff)}</span>`;
   }
 
+  const mult = document.getElementById('fInvert').checked ? -1 : 1;
   const tbody = document.querySelector('#checkingTable tbody');
   tbody.innerHTML = '';
   for (const t of result.transactions) {
+    const v = t.amount * mult;
     const tr = document.createElement('tr');
-    const cls = t.amount < 0 ? 'neg' : 'pos';
-    tr.innerHTML = `<td>${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="memo-cell">${escapeHtml(t.memo)}</td><td class="num ${cls}">${fmtBRL(t.amount)}</td>`;
+    const cls = v < 0 ? 'neg' : 'pos';
+    tr.innerHTML = `<td>${fmtDateBR(t.date)}</td><td>${escapeHtml(t.description)}</td><td class="memo-cell">${escapeHtml(t.memo)}</td><td class="num ${cls}">${fmtBRL(v)}</td>`;
     tbody.appendChild(tr);
   }
   checkingCard.classList.remove('hidden');
@@ -774,12 +788,14 @@ function renderInvestment(result) {
     iCheckEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diff)}</span>`;
   }
 
+  const iMult = document.getElementById('iInvert').checked ? -1 : 1;
   const tbody = document.querySelector('#investmentTable tbody');
   tbody.innerHTML = '';
   for (const e of result.events) {
+    const v = e.valor * iMult;
     const tr = document.createElement('tr');
-    const cls = e.valor < 0 ? 'neg' : 'pos';
-    tr.innerHTML = `<td>${fmtDateBR(e.data)}</td><td>${escapeHtml(e.tipo)}</td><td>${escapeHtml(e.historico)}</td><td class="num ${cls}">${fmtBRL(e.valor)}</td>`;
+    const cls = v < 0 ? 'neg' : 'pos';
+    tr.innerHTML = `<td>${fmtDateBR(e.data)}</td><td>${escapeHtml(e.tipo)}</td><td>${escapeHtml(e.historico)}</td><td class="num ${cls}">${fmtBRL(v)}</td>`;
     tbody.appendChild(tr);
   }
   investmentCard.classList.remove('hidden');
@@ -788,6 +804,13 @@ function renderInvestment(result) {
 function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+document.getElementById('fInvert').addEventListener('change', () => {
+  if (currentResult && currentResult.docType === 'checking') renderChecking(currentResult);
+});
+document.getElementById('iInvert').addEventListener('change', () => {
+  if (currentResult && currentResult.docType === 'investment') renderInvestment(currentResult);
+});
 
 document.getElementById('btnOfx').addEventListener('click', () => {
   if (!currentResult) return;
