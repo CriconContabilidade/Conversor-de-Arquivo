@@ -124,7 +124,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
   <div class="card">
     <div id="dropzone" class="dropzone">
       <div class="big">Arraste um PDF de extrato aqui, ou clique para escolher</div>
-      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Demonstrativo de Rentabilidade)</div>
+      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Demonstrativo de Rentabilidade) · CaixaW ProSind (Relatório de Caixa)</div>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div id="statusLine" class="status-line hidden"></div>
@@ -245,6 +245,48 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
     </div>
   </div>
 
+  <!-- CAIXAW PROSIND RELATÓRIO DE CAIXA RESULT -->
+  <div id="caixaCard" class="card hidden">
+    <div class="section-title">Relatório de caixa identificado</div>
+    <div class="fields">
+      <div class="field"><label>Código Emp. (Domínio)</label><input id="xCodigoEmp" type="text" placeholder="deixe em branco se não souber"></div>
+    </div>
+
+    <div class="summary-row">
+      <div class="item"><div class="k">Período</div><div class="v" id="xPeriod">—</div></div>
+      <div class="item"><div class="k">Lançamentos</div><div class="v" id="xCount">—</div></div>
+      <div class="item"><div class="k">Soma entradas</div><div class="v" id="xEntradas">—</div></div>
+      <div class="item"><div class="k">Soma saídas</div><div class="v" id="xSaidas">—</div></div>
+      <div class="item"><div class="k">Conferência</div><div class="v" id="xCheck">—</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="preview" id="caixaTable">
+        <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn" id="btnXlsxCaixa">Baixar Excel (modelo Domínio)</button>
+    </div>
+  </div>
+
+  <!-- STANDALONE: GENERATE DOMÍNIO IMPORT TXT FROM A FILLED SPREADSHEET -->
+  <div class="card">
+    <div class="section-title">Gerar TXT de importação a partir de uma planilha já preenchida</div>
+    <div class="small" style="margin-bottom:14px;color:var(--ink-soft);">Suba a planilha (no modelo Data / Débito / Crédito / Valor / Cód. Hist. / Complemento Histórico / Inicia Lote / Código Emp. / Centro de Custo Débito / Centro de Custo Crédito, com o cabeçalho na linha 5 e os lançamentos a partir da linha 6) depois de preencher Débito e Crédito — o mesmo que o botão de macro do Excel faz, só que aqui no navegador.</div>
+    <div id="txtDropzone" class="dropzone">
+      <div class="big">Arraste a planilha preenchida aqui, ou clique para escolher</div>
+      <div class="small">.xlsx ou .xlsm</div>
+      <input type="file" id="txtFileInput" accept=".xlsx,.xlsm,.xls">
+    </div>
+    <div id="txtStatusLine" class="status-line hidden"></div>
+    <div class="btn-row hidden" id="txtBtnRow">
+      <button class="btn" id="btnGerarTxt">Baixar TXT para importação</button>
+    </div>
+  </div>
+
   <footer>Conversor local · nenhum dado sai do seu computador</footer>
 </div>
 
@@ -259,10 +301,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs
 // visual reading order, and some PDFs place adjacent table cells with
 // no literal space character between them, relying on x-position gaps).
 // =====================================================================
-async function extractText(file) {
+// Returns, per page, an array of "rows" — each row an array of positioned
+// tokens ({str, x, x2, y}, x2 = right edge) in left-to-right reading order.
+// This is the shared foundation both extractText() (joins into plain lines
+// for the regex-based parsers) and extractPositionedRows() (keeps positions,
+// for parsers that need to classify tokens into fixed table columns) build on.
+async function extractPdfPages(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-  const pageTexts = [];
+  const pages = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
     // Apply the page's viewport transform (handles /Rotate, e.g. wide tables
@@ -275,12 +322,8 @@ async function extractText(file) {
       .filter(it => it.str !== undefined)
       .map(it => {
         const tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
-        return {
-          str: it.str,
-          x: tx[4],
-          y: tx[5],
-          w: it.width || (it.str.length * Math.abs(it.transform[0] || 5)),
-        };
+        const w = it.width || (it.str.length * Math.abs(it.transform[0] || 5));
+        return { str: it.str, x: tx[4], y: tx[5], x2: tx[4] + w };
       });
 
     // Group into lines by y-position. Some cells (e.g. a wrapped amount like
@@ -303,7 +346,25 @@ async function extractText(file) {
       }
     }
     for (const row of rows) row.items.sort((a, b) => a.x - b.x);
+    pages.push({ rows, height: viewport.height });
+  }
+  return pages;
+}
 
+// Per page: { height, rows: [ [ {str,x,x2,y}, ... ], ... ] } — for parsers
+// that classify tokens into fixed table columns by x-position rather than
+// relying on whitespace in the joined text.
+async function extractPositionedRows(file) {
+  const pages = await extractPdfPages(file);
+  return pages.map(p => ({
+    height: p.height,
+    rows: p.rows.map(row => row.items.filter(it => it.str.trim() !== '')),
+  }));
+}
+
+async function extractText(file) {
+  const pages = await extractPdfPages(file);
+  const pageTexts = pages.map(p => p.rows).map(rows => {
     const lines = rows.map(row => {
       let line = '';
       let prevEnd = null;
@@ -317,13 +378,12 @@ async function extractText(file) {
           }
         }
         line += str;
-        prevEnd = it.x + it.w;
+        prevEnd = it.x2;
       }
       return line.replace(/\s+/g, ' ').trim();
     }).filter(l => l.length > 0);
-
-    pageTexts.push(lines.join('\n'));
-  }
+    return lines.join('\n');
+  });
   return pageTexts.join('\n');
 }
 
@@ -643,6 +703,106 @@ PARSERS.push({
   }
 });
 
+// ---- CaixaW ProSind · Relatório do Caixa Detalhado -------------------
+// The table's columns (DIA, DOCUMENTO, CONTA, DESCRIÇÃO, VALOR ENTRADA,
+// VALOR SAÍDA) aren't separated by clean whitespace in the text layer, and
+// a saída-type entry's DIA/DOCUMENTO/CONTA often render on a LATER visual
+// line than its own description/value (reading order ≠ table order) — so
+// this parser classifies tokens by x-position instead of regexing lines,
+// using parseFile() to get at the raw positions extractText() has already
+// collapsed away. Column x-bands and the two value columns' right edges
+// (they're right-aligned, so x2 is stable while x0 shifts per digit count)
+// were measured directly against a real report and are stable regardless
+// of which entity's data it is — only the letterhead (org name/address,
+// varying line count) and footer differ per client, both excluded
+// generically by y-position (report header/footer occupy the same y-bands
+// on every page of this software's fixed template) rather than by text.
+PARSERS.push({
+  id: 'caixa-prosind',
+  bank: 'CaixaW ProSind',
+  docType: 'caixa',
+  label: 'CaixaW ProSind — Relatório de Caixa',
+  detect(text) {
+    return /CaixaW/i.test(text) && /Relat[óo]rio do Caixa Detalhado/i.test(text);
+  },
+  async parseFile(file) {
+    const text = await extractText(file);
+    const mesMatch = text.match(/M[êe]s:\s*(\d{2})\/(\d{4})/);
+    if (!mesMatch) throw new Error('Não foi possível identificar o mês do relatório (CaixaW ProSind).');
+    const mes = parseInt(mesMatch[1], 10), ano = parseInt(mesMatch[2], 10);
+
+    const totalMatch = text.match(/TOTAL:\s*([\d.,]+)\s+([\d.,]+)/);
+    const totalEntrada = totalMatch ? parseBRL(totalMatch[1]) : null;
+    const totalSaida = totalMatch ? parseBRL(totalMatch[2]) : null;
+    const nroMatch = text.match(/NRO MOVIMENTOS:\s*(\d+)/);
+    const nroEsperado = nroMatch ? parseInt(nroMatch[1], 10) : null;
+
+    const pages = await extractPositionedRows(file);
+    const HEADER_Y_MAX = 155;
+    const FULL_LINE_SKIP = /^(CaixaW|Relat[óo]rio do Caixa|DIA\b.*DOCUMENTO|SALDO ANTERIOR|SALDO BLOQ|SALDO DO CAIXA|TOTAL:|NRO MOVIMENTOS)/i;
+
+    function band(tok) {
+      if (Math.abs(tok.x2 - 503.9) < 8) return 'entrada';
+      if (Math.abs(tok.x2 - 577.7) < 8) return 'saida';
+      if (tok.x < 40) return 'dia';
+      if (tok.x < 125) return 'doc';
+      if (tok.x < 155) return 'conta';
+      if (tok.x < 460) return 'desc';
+      return null;
+    }
+
+    const raw = [];
+    let current = null;
+    for (const page of pages) {
+      const footerYMin = page.height - 60;
+      for (const row of page.rows) {
+        if (row.length === 0) continue;
+        const y = row[0].y;
+        if (y < HEADER_Y_MAX || y > footerYMin) continue;
+        const fullLine = row.map(t => t.str).join(' ').trim();
+        if (!fullLine || FULL_LINE_SKIP.test(fullLine)) continue;
+
+        const cols = { dia: [], doc: [], conta: [], desc: [], entrada: [], saida: [] };
+        for (const tok of row) {
+          const b = band(tok);
+          if (b) cols[b].push(tok.str);
+        }
+        const diaTxt = cols.dia.join(' ').trim();
+        const docTxt = cols.doc.join(' ').trim();
+        const descTxt = cols.desc.join(' ').trim();
+        const entradaTxt = cols.entrada.join(' ').trim();
+        const saidaTxt = cols.saida.join(' ').trim();
+
+        const isTxnStart = /^\d{1,2}$/.test(diaTxt) && docTxt.length > 0;
+        if (isTxnStart) {
+          if (current) raw.push(current);
+          current = { dia: diaTxt, desc: descTxt ? [descTxt] : [], entrada: entradaTxt, saida: saidaTxt };
+        } else if (current) {
+          if (descTxt) current.desc.push(descTxt);
+          if (entradaTxt && !current.entrada) current.entrada = entradaTxt;
+          if (saidaTxt && !current.saida) current.saida = saidaTxt;
+        }
+      }
+    }
+    if (current) raw.push(current);
+    if (raw.length === 0) throw new Error('Nenhum lançamento foi reconhecido no relatório.');
+
+    const rows = raw.map(t => {
+      const descricao = t.desc.join(' ').replace(/\s+/g, ' ').trim();
+      const entrada = t.entrada ? parseBRL(t.entrada) : 0;
+      const saida = t.saida ? parseBRL(t.saida) : 0;
+      const valor = entrada > 0 ? entrada : saida;
+      const data = new Date(Date.UTC(ano, mes - 1, parseInt(t.dia, 10)));
+      return { data, descricao, valor, entrada, saida };
+    });
+
+    const somaEntradas = rows.reduce((s, r) => s + r.entrada, 0);
+    const somaSaidas = rows.reduce((s, r) => s + r.saida, 0);
+
+    return { docType: 'caixa', mes, ano, rows, totalEntrada, totalSaida, nroEsperado, somaEntradas, somaSaidas };
+  }
+});
+
 // =====================================================================
 // OFX GENERATOR (SGML 1.0.2)
 // =====================================================================
@@ -869,6 +1029,31 @@ function downloadCreditCardXlsx(result) {
   XLSX.writeFile(wb, `fatura-${fmtISO(result.vencDate)}.xlsx`);
 }
 
+// Matches the exact column model of the user's Domínio import spreadsheet
+// (Data / Débito / Crédito / Valor / Cód. Hist. / Complemento Histórico /
+// Inicia Lote / Código Emp. / Centro de Custo Débito / Centro de Custo
+// Crédito) — Débito, Crédito, Cód. Hist. and both Centro de Custo columns
+// are left blank for the accountant to fill in by hand.
+function downloadCaixaXlsx(result) {
+  const codigoEmp = document.getElementById('xCodigoEmp').value.trim();
+  const rows = result.rows.map(r => ({
+    'Data': fmtDateBR(r.data),
+    'Débito': '',
+    'Crédito': '',
+    'Valor': r.valor,
+    'Cód. Hist.': '',
+    'Complemento Histórico': r.descricao,
+    'Inicia Lote': 1,
+    'Código Emp.': codigoEmp,
+    'Centro de Custo Débito': '',
+    'Centro de Custo Crédito': '',
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Lançamentos');
+  XLSX.writeFile(wb, `caixa-${String(result.mes).padStart(2, '0')}-${result.ano}.xlsx`);
+}
+
 // =====================================================================
 // UI WIRING
 // =====================================================================
@@ -878,6 +1063,7 @@ const statusLine = document.getElementById('statusLine');
 const checkingCard = document.getElementById('checkingCard');
 const investmentCard = document.getElementById('investmentCard');
 const creditCardCard = document.getElementById('creditCardCard');
+const caixaCard = document.getElementById('caixaCard');
 
 let currentResult = null;
 
@@ -902,6 +1088,7 @@ async function handleFile(file) {
   checkingCard.classList.add('hidden');
   investmentCard.classList.add('hidden');
   creditCardCard.classList.add('hidden');
+  caixaCard.classList.add('hidden');
   setStatus('Lendo PDF…');
   try {
     const text = await extractText(file);
@@ -911,11 +1098,15 @@ async function handleFile(file) {
       return;
     }
     setStatus(`Detectado: ${parser.label} — processando…`);
-    const result = parser.parse(text);
+    // Most parsers work off the joined-text lines; ones that need real token
+    // positions (tables with columns not separated by clean whitespace, like
+    // the CaixaW ProSind report) implement parseFile(file) instead.
+    const result = parser.parseFile ? await parser.parseFile(file) : parser.parse(text);
     currentResult = result;
     if (result.docType === 'checking') renderChecking(result);
     else if (result.docType === 'investment') renderInvestment(result);
     else if (result.docType === 'creditcard') renderCreditCard(result);
+    else if (result.docType === 'caixa') renderCaixa(result);
     setStatus(`Detectado: ${parser.label} — ${file.name}`);
   } catch (err) {
     console.error(err);
@@ -1031,6 +1222,36 @@ function renderCreditCard(result) {
   creditCardCard.classList.remove('hidden');
 }
 
+function renderCaixa(result) {
+  document.getElementById('xPeriod').textContent = `${String(result.mes).padStart(2, '0')}/${result.ano}`;
+  document.getElementById('xCount').textContent = result.rows.length;
+  document.getElementById('xEntradas').textContent = `R$ ${fmtBRL(result.somaEntradas)}`;
+  document.getElementById('xSaidas').textContent = `R$ ${fmtBRL(result.somaSaidas)}`;
+
+  const xCheckEl = document.getElementById('xCheck');
+  if (result.totalEntrada == null || result.totalSaida == null) {
+    xCheckEl.innerHTML = '<span class="badge warn">— sem total p/ conferir</span>';
+  } else {
+    const diffE = Math.round((result.somaEntradas - result.totalEntrada) * 100) / 100;
+    const diffS = Math.round((result.somaSaidas - result.totalSaida) * 100) / 100;
+    if (Math.abs(diffE) < 0.01 && Math.abs(diffS) < 0.01) {
+      xCheckEl.innerHTML = '<span class="badge ok">✓ confere</span>';
+    } else {
+      xCheckEl.innerHTML = `<span class="badge err">⚠ diferença R$ ${fmtBRL(diffE)} (entrada) / R$ ${fmtBRL(diffS)} (saída)</span>`;
+    }
+  }
+
+  const tbody = document.querySelector('#caixaTable tbody');
+  tbody.innerHTML = '';
+  for (const r of result.rows) {
+    const tr = document.createElement('tr');
+    const cls = r.entrada > 0 ? 'pos' : 'neg';
+    tr.innerHTML = `<td>${fmtDateBR(r.data)}</td><td>${escapeHtml(r.descricao)}</td><td class="num ${cls}">${fmtBRL(r.valor)}</td>`;
+    tbody.appendChild(tr);
+  }
+  caixaCard.classList.remove('hidden');
+}
+
 function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -1071,6 +1292,88 @@ document.getElementById('btnOfxCreditCard').addEventListener('click', () => {
   if (!currentResult) return;
   const ofx = buildCreditCardOFX(currentResult);
   downloadText(`fatura-${fmtISO(currentResult.vencDate)}.ofx`, ofx, 'application/x-ofx');
+});
+document.getElementById('btnXlsxCaixa').addEventListener('click', () => {
+  if (currentResult) downloadCaixaXlsx(currentResult);
+});
+
+// =====================================================================
+// STANDALONE: generate the Domínio import TXT from an already-filled
+// spreadsheet — same job as the "Gerar" macro in the user's .xlsm model
+// (join columns A–J with ";", one line per row starting after the header),
+// done client-side so it works without opening Excel or trusting a macro.
+// =====================================================================
+const txtDropzone = document.getElementById('txtDropzone');
+const txtFileInput = document.getElementById('txtFileInput');
+let txtSourceRows = null;
+let txtSourceFilename = '';
+
+txtDropzone.addEventListener('click', () => txtFileInput.click());
+txtDropzone.addEventListener('dragover', e => { e.preventDefault(); txtDropzone.classList.add('drag'); });
+txtDropzone.addEventListener('dragleave', () => txtDropzone.classList.remove('drag'));
+txtDropzone.addEventListener('drop', e => {
+  e.preventDefault(); txtDropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleTxtSourceFile(e.dataTransfer.files[0]);
+});
+txtFileInput.addEventListener('change', () => {
+  if (txtFileInput.files.length) handleTxtSourceFile(txtFileInput.files[0]);
+});
+
+function setTxtStatus(msg, isErr) {
+  const el = document.getElementById('txtStatusLine');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  el.classList.toggle('err', !!isErr);
+}
+
+async function handleTxtSourceFile(file) {
+  document.getElementById('txtBtnRow').classList.add('hidden');
+  setTxtStatus('Lendo planilha…');
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+
+    const headerRowIdx = grid.findIndex(row => String(row[0]).trim() === 'Data');
+    if (headerRowIdx === -1) throw new Error('Não encontrei a linha de cabeçalho ("Data" na coluna A).');
+
+    const rows = [];
+    for (let i = headerRowIdx + 1; i < grid.length; i++) {
+      const row = grid[i];
+      if (row[0] === '' || row[0] == null) break;
+      rows.push(row);
+    }
+    if (rows.length === 0) throw new Error('Nenhum lançamento encontrado abaixo do cabeçalho.');
+
+    txtSourceRows = rows;
+    txtSourceFilename = file.name.replace(/\.(xlsx|xlsm|xls)$/i, '');
+    setTxtStatus(`${rows.length} lançamentos encontrados em ${file.name}`);
+    document.getElementById('txtBtnRow').classList.remove('hidden');
+  } catch (err) {
+    console.error(err);
+    setTxtStatus('Erro ao ler a planilha: ' + err.message, true);
+  }
+}
+
+// Mirrors VBA's implicit `Range.Value & ";"` string conversion: dates come
+// out as the display-locale short date, numbers use comma as the decimal
+// separator (no thousands grouping) and blank cells become empty strings.
+function vbaCellToString(v) {
+  if (v === '' || v == null) return '';
+  if (v instanceof Date) return fmtDateBR(v);
+  if (typeof v === 'number') return String(v).replace('.', ',');
+  return String(v);
+}
+
+document.getElementById('btnGerarTxt').addEventListener('click', () => {
+  if (!txtSourceRows) return;
+  const lines = txtSourceRows.map(row => {
+    const cells = [];
+    for (let c = 0; c < 10; c++) cells.push(vbaCellToString(row[c]));
+    return cells.join(';');
+  });
+  downloadText(`${txtSourceFilename || 'lanctos'}.txt`, lines.join('\r\n') + '\r\n', 'text/plain');
 });
 </script>
 </body>
