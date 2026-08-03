@@ -124,7 +124,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
   <div class="card">
     <div id="dropzone" class="dropzone">
       <div class="big">Arraste um PDF de extrato aqui, ou clique para escolher</div>
-      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Demonstrativo de Rentabilidade) · CaixaW ProSind (Relatório de Caixa)</div>
+      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Extrato Conta Corrente e Demonstrativo de Rentabilidade) · CaixaW ProSind (Relatório de Caixa)</div>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div id="statusLine" class="status-line hidden"></div>
@@ -607,6 +607,90 @@ PARSERS.push({
       account: contaMatch ? { coop: contaMatch[1], agencia: contaMatch[2], conta: contaMatch[3] } : null,
       periodStart, periodEnd, titulos, events, openingBalance, closingBalance,
     };
+  }
+});
+
+// ---- Unicred · Extrato Conta Corrente --------------------------------
+// The document has no literal "UNICRED" text in the PDF's text layer (the
+// bank's logo is a vector graphic, not text pdf.js can extract) — same as
+// the Demonstrativo de Rentabilidade parser above. Detection instead keys
+// off this template's distinctive header row plus the "Coop: X - AG: Y -
+// Conta: Z" account line shared with that other Unicred document type.
+PARSERS.push({
+  id: 'unicred-checking',
+  bank: 'Unicred',
+  docType: 'checking',
+  label: 'Unicred — Extrato Conta Corrente',
+  detect(text) {
+    return /Coop:\s*\d+\s*-\s*AG:\s*\d+\s*-\s*Conta:\s*[\d-]+/.test(text)
+      && /Data\s+Lan[çc]amentos\s+Valor\s*\(R\$\)\s+Saldo\s*\(R\$\)/i.test(text);
+  },
+  parse(rawText) {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    const periodMatch = rawText.match(/Per[íi]odo de\s*(\d{2}\/\d{2}\/\d{4})\s*a\s*(\d{2}\/\d{2}\/\d{4})/);
+    if (!periodMatch) throw new Error('Não foi possível identificar o período do extrato.');
+    const periodStart = brToDate(periodMatch[1]);
+    const periodEnd = brToDate(periodMatch[2]);
+
+    const contaMatch = rawText.match(/Coop:\s*(\d+)\s*-\s*AG:\s*(\d+)\s*-\s*Conta:\s*([\d-]+)/);
+    const bankInfo = {
+      bankId: contaMatch ? contaMatch[1] : '',
+      branchId: contaMatch ? contaMatch[2] : '',
+      accountId: contaMatch ? contaMatch[3] : '',
+      bankName: 'Unicred',
+      accountHolder: '',
+    };
+
+    const openingMatch = rawText.match(/Saldo em\s*(\d{2}\/\d{2}\/\d{4}):\s*(-?\s?R\$\s?[\d.]+,\d{2})/);
+    const closingMatch = rawText.match(/Saldo no final do per[íi]odo\s*(-?\s?R\$\s?[\d.]+,\d{2})/);
+    if (!openingMatch || !closingMatch) throw new Error('Não foi possível localizar o saldo inicial/final do extrato.');
+    const openingBalance = parseBRL(openingMatch[2]);
+    const openingBalanceDate = brToDate(openingMatch[1]);
+    const closingBalance = parseBRL(closingMatch[1]);
+    const closingBalanceDate = periodEnd;
+
+    // Each row is "DD/MM/YYYY descrição ( Doc.: ... ) [-] R$ valor R$ saldo" on
+    // a single line — pdf.js keeps them together except when the parenthetical
+    // detail is long enough to spill onto its own visual line below the
+    // amounts (the closing ")" then arrives on that next line instead).
+    const TXN_LINE = /^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(-?\s?R\$\s?[\d.]+,\d{2})\s+(-?\s?R\$\s?[\d.]+,\d{2})$/;
+    const NOISE = /^(CENTRAL DE RELACIONAMENTO|0800|Saldo no final|Saldo atual|Total dispon[íi]vel|Saldo bloqueado|Limite de cheque especial|IOF\b|Juros|Tarifas pendentes|Saldo Bloqueado|Data\s+Lan[çc]amentos|Lan[çc]amentos futuros|P[áa]g\.)/i;
+
+    const transactions = [];
+    let txnCounter = 0;
+    for (let idx = 0; idx < lines.length; idx++) {
+      const m = lines[idx].match(TXN_LINE);
+      if (!m) continue;
+      let [, dateStr, desc, valueStr] = m;
+
+      let openParens = (desc.match(/\(/g) || []).length;
+      let closeParens = (desc.match(/\)/g) || []).length;
+      let j = idx + 1;
+      while (openParens > closeParens && j < lines.length && !TXN_LINE.test(lines[j]) && !NOISE.test(lines[j])) {
+        desc += ' ' + lines[j];
+        openParens += (lines[j].match(/\(/g) || []).length;
+        closeParens += (lines[j].match(/\)/g) || []).length;
+        j++;
+      }
+      idx = j - 1;
+
+      const date = brToDate(dateStr);
+      const amount = parseBRL(valueStr);
+      const descMatch = desc.match(/^(.+?)\s*\(\s*(.+?)\s*\)\s*$/);
+      const description = descMatch ? descMatch[1].trim() : desc.trim();
+      const memo = descMatch ? descMatch[2].trim() : '';
+
+      txnCounter++;
+      transactions.push({
+        date, description, memo, amount,
+        fitid: `${fmtOfxDate(date)}${String(txnCounter).padStart(4, '0')}`,
+      });
+    }
+
+    if (transactions.length === 0) throw new Error('Nenhum lançamento foi reconhecido no extrato.');
+
+    return { docType: 'checking', bankInfo, periodStart, periodEnd, openingBalance, openingBalanceDate, closingBalance, closingBalanceDate, transactions };
   }
 });
 
