@@ -134,7 +134,7 @@ footer{margin-top:30px;font-size:11.5px;color:var(--ink-soft);text-align:center;
   <div class="card">
     <div id="dropzone" class="dropzone">
       <div class="big">Arraste um PDF de extrato aqui, ou clique para escolher</div>
-      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Extrato Conta Corrente e Demonstrativo de Rentabilidade) · CaixaW ProSind (Relatório de Caixa)</div>
+      <div class="small">Suportado hoje: Sicoob (Extrato Conta Corrente) · Sicredi (Fatura Cartão de Crédito) · Unicred (Extrato Conta Corrente e Demonstrativo de Rentabilidade) · Banco Inter (Extrato Conta Corrente) · CaixaW ProSind (Relatório de Caixa)</div>
       <input type="file" id="fileInput" accept="application/pdf">
     </div>
     <div id="statusLine" class="status-line hidden"></div>
@@ -699,6 +699,86 @@ PARSERS.push({
     }
 
     if (transactions.length === 0) throw new Error('Nenhum lançamento foi reconhecido no extrato.');
+
+    return { docType: 'checking', bankInfo, periodStart, periodEnd, openingBalance, openingBalanceDate, closingBalance, closingBalanceDate, transactions };
+  }
+});
+
+// ---- Banco Inter · Extrato Conta Corrente ----------------------------
+// Unlike the other checking parsers, this statement never prints an
+// explicit opening balance — only a running "Saldo por transação" column
+// and a per-day "Saldo do dia" total. The opening balance is instead
+// derived from the identity balance_before = balance_after - amount,
+// applied to the very first transaction in the file; this is exact
+// because every transaction row carries its own post-transaction balance.
+const MESES_PT_LONG = { janeiro:1, fevereiro:2, marco:3, abril:4, maio:5, junho:6, julho:7, agosto:8, setembro:9, outubro:10, novembro:11, dezembro:12 };
+function stripAccents(s) { return s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+PARSERS.push({
+  id: 'inter-checking',
+  bank: 'Banco Inter',
+  docType: 'checking',
+  label: 'Banco Inter — Extrato Conta Corrente',
+  detect(text) {
+    return /Institui[çc][ãa]o:\s*Banco Inter/i.test(text) && /Saldo do dia:/i.test(text);
+  },
+  parse(rawText) {
+    const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+    const periodMatch = rawText.match(/Per[íi]odo:\s*(\d{2})\/(\d{2})\/(\d{4})\s*a\s*(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!periodMatch) throw new Error('Não foi possível identificar o período do extrato.');
+    const periodStart = new Date(Date.UTC(+periodMatch[3], +periodMatch[2] - 1, +periodMatch[1]));
+    const periodEnd = new Date(Date.UTC(+periodMatch[6], +periodMatch[5] - 1, +periodMatch[4]));
+
+    const acctMatch = rawText.match(/Institui[çc][ãa]o:\s*(.+?)\s*,\s*Ag[êe]ncia:\s*([\w-]+)\s*,\s*Conta:\s*([\w-]+)/);
+    const bankInfo = {
+      bankId: '077', // Banco Inter — código Febraban/COMPE fixo (não aparece no texto do extrato)
+      branchId: acctMatch ? acctMatch[2] : '',
+      accountId: acctMatch ? acctMatch[3] : '',
+      bankName: acctMatch ? acctMatch[1] : 'Banco Inter',
+      accountHolder: '',
+    };
+
+    const closingMatch = rawText.match(/Saldo total[\s\S]*?\n\s*(-?R\$\s?[\d.]+,\d{2})/);
+    if (!closingMatch) throw new Error('Não foi possível localizar o saldo total do extrato.');
+    const closingBalance = parseBRL(closingMatch[1]);
+    const closingBalanceDate = periodEnd;
+
+    // Day headers ("1 de Julho de 2026 Saldo do dia: R$ ...") set the date
+    // applied to every transaction row that follows, until the next header.
+    const DAY_HEADER = /^(\d{1,2}) de (\S+) de (\d{4}) Saldo do dia:\s*(-?R\$\s?[\d.]+,\d{2})/;
+    const TXN_LINE = /^(.+?):\s*"(.+?)"\s+(-?R\$\s?[\d.]+,\d{2})\s+(-?R\$\s?[\d.]+,\d{2})$/;
+
+    const transactions = [];
+    let currentDate = periodStart;
+    let txnCounter = 0;
+
+    for (const line of lines) {
+      const dm = line.match(DAY_HEADER);
+      if (dm) {
+        const monthNum = MESES_PT_LONG[stripAccents(dm[2].toLowerCase())];
+        if (monthNum) currentDate = new Date(Date.UTC(+dm[3], monthNum - 1, +dm[1]));
+        continue;
+      }
+      const tm = line.match(TXN_LINE);
+      if (!tm) continue;
+      const [, desc, detail, valueStr, balanceStr] = tm;
+      const amount = parseBRL(valueStr);
+      txnCounter++;
+      transactions.push({
+        date: currentDate,
+        description: desc.trim(),
+        memo: detail.trim(),
+        amount,
+        runningBalance: parseBRL(balanceStr),
+        fitid: `${fmtOfxDate(currentDate)}${String(txnCounter).padStart(4, '0')}`,
+      });
+    }
+
+    if (transactions.length === 0) throw new Error('Nenhum lançamento foi reconhecido no extrato.');
+
+    const first = transactions[0];
+    const openingBalance = Math.round((first.runningBalance - first.amount) * 100) / 100;
+    const openingBalanceDate = periodStart;
 
     return { docType: 'checking', bankInfo, periodStart, periodEnd, openingBalance, openingBalanceDate, closingBalance, closingBalanceDate, transactions };
   }
