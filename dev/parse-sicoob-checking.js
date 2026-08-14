@@ -6,17 +6,24 @@ function parseBRL(str) {
   return parseFloat(str.replace(/\./g, '').replace(',', '.'));
 }
 
-function parseSicoobChecking(rawText) {
-  const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+// Some statements are "print to PDF" exports of the internet-banking page
+// rather than the dedicated PDF export, so pdf.js sees the browser's page
+// header/footer (timestamp title, URL, repeated column header) stamped on
+// every page, interleaved with the transaction rows. Strip them up front
+// rather than let them get swept into a transaction's memo lines.
+const NOISE_LINE = /^(https?:\/\/|\d{2}\/\d{2}\/\d{4},?\s*\d{2}:\d{2}\s+Sicoob\s*\|\s*Internet Banking$|Data\s+(Documento\s+)?Hist[óo]rico\s+Valor$)/i;
 
-  const periodMatch = rawText.match(/PERÍODO:\s*(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/);
+function parseSicoobChecking(rawText) {
+  const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0 && !NOISE_LINE.test(l));
+
+  const periodMatch = rawText.match(/PER[ÍI]ODO:\s*(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
   if (!periodMatch) throw new Error('Período não encontrado');
   const [, periodStartStr, periodEndStr] = periodMatch;
   const periodEnd = brToDate(periodEndStr);
   const periodStart = brToDate(periodStartStr);
 
-  const coopMatch = rawText.match(/COOP\.:\s*([\d-]+)\s*\/\s*(.+)/);
-  const contaMatch = rawText.match(/CONTA:\s*([\d.-]+)\s*\/\s*(.+)/);
+  const coopMatch = rawText.match(/(?:COOPERATIVA|COOP\.?):\s*([\d-]+)\s*\/\s*(.+)/i);
+  const contaMatch = rawText.match(/CONTA:\s*([\d.-]+)\s*\/\s*(.+)/i);
   const bankInfo = {
     bankId: coopMatch ? coopMatch[1].replace(/\D/g, '') : '',
     bankName: coopMatch ? coopMatch[2].trim() : '',
@@ -24,7 +31,10 @@ function parseSicoobChecking(rawText) {
     accountHolder: contaMatch ? contaMatch[2].trim() : '',
   };
 
-  const TXN_LINE = /^(\d{2}\/\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})\s*([CD])?\*?$/;
+  // "R$ " sometimes prefixes the value (statements that show it inline per
+  // row); consume it as part of the value token, not the description, or
+  // exact-match checks like `desc === 'SALDO ANTERIOR'` below would fail.
+  const TXN_LINE = /^(\d{2}\/\d{2})\s+(.+?)\s+(?:R\$\s*)?(-?[\d.]+,\d{2})\s*([CD])?\*?$/;
   const ONLY_SUFFIX = /^([CD])\*?$/;
 
   const transactions = [];
