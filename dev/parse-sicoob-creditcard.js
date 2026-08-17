@@ -40,15 +40,14 @@ function parseSicoobCreditCard(rawText) {
   const TXN_LINE = /^(\d{2}\/\d{2})\s+(.+?)\s+(-?[\d.]+,\d{2})$/;
   const GASTOS_HEADER = /^GASTOS DE\s+(.+?)\s*\((\d+)\)$/i;
   const TOTAL_LINE = /^TOTAL\s+([\d.,]+)$/i;
-  // The primary cardholder's own charges aren't itemized under a "GASTOS DE"
-  // header — they sit directly under MOVIMENTOS, alongside the fatura's own
-  // running-balance bookkeeping lines (opening balance, the payment that
-  // settled last month's fatura). Those two are informational, not charges
-  // to post — same reasoning as excluding "SALDO ..." lines in the checking
-  // account statement, plus "PAGAMENTO" here since it's the fatura being
-  // paid off, which typically shows up separately in the bank statement
-  // import for the account it was debited from.
-  const EXCLUDE_DESC = /^(SALDO|PAGAMENTO)\b/i;
+  // "SALDO ..." (opening balance carried over from last month) is
+  // bookkeeping for the fatura's own running total, not a charge — same
+  // reasoning as excluding it in the checking account statement.
+  // "PAGAMENTO ..." (the payment that settled last month's fatura) IS kept
+  // as a transaction: the user wants the invoice's own payment posted from
+  // this import too, not only inferred from the bank statement it was
+  // debited from.
+  const EXCLUDE_DESC = /^SALDO\b/i;
 
   const startIdx = lines.findIndex(l => l === 'MOVIMENTOS');
   const endIdx = lines.findIndex(l => l === 'DEMONSTRATIVO DE PAGAMENTO EM R$');
