@@ -1107,8 +1107,12 @@ PARSERS.push({
 // =====================================================================
 // OFX GENERATOR (SGML 1.0.2)
 // =====================================================================
+// O Domínio não importa corretamente caracteres acentuados vindos de OFX
+// (mesmo com CHARSET:1252 declarado no header) — por isso todo texto que
+// passa por aqui perde os acentos antes de virar NAME/MEMO/etc., não só
+// escapa os caracteres reservados do SGML.
 function escapeOfx(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return stripAccents(String(s || '')).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function buildOfxEnvelope({ bankId, branchId, accountId, acctType, periodStart, periodEnd, trnLines, balAmt, balDate }) {
   const now = fmtOfxDate(new Date());
